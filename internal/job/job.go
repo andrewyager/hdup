@@ -1,4 +1,5 @@
-// Package job reads the job file and the rclone remotes it names.
+// Package job reads the job file and the remotes it names from the rclone
+// config file.
 package job
 
 import (

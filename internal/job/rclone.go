@@ -1,12 +1,12 @@
 package job
 
 import (
-	"encoding/json"
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,44 +23,71 @@ type FTPRemote struct {
 	Pass string
 }
 
-type Rclone struct{ Bin string }
+// Remotes holds the remotes of an rclone config file: name, then key, then
+// value.
+type Remotes map[string]map[string]string
 
-// FindRclone looks in PATH, then in the usual Homebrew locations.
-func FindRclone() (string, error) {
-	if p, err := exec.LookPath("rclone"); err == nil {
+// ConfigPath gives the rclone config file: RCLONE_CONFIG, or the first
+// default location of rclone that exists.
+func ConfigPath() (string, error) {
+	if p := os.Getenv("RCLONE_CONFIG"); p != "" {
 		return p, nil
 	}
-	for _, p := range []string{"/opt/homebrew/bin/rclone", "/usr/local/bin/rclone"} {
+	var candidates []string
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		candidates = append(candidates, filepath.Join(xdg, "rclone", "rclone.conf"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".config", "rclone", "rclone.conf"),
+			filepath.Join(home, ".rclone.conf"))
+	}
+	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
-	return "", errors.New("rclone is not installed")
+	return "", errors.New("no rclone config file found; set RCLONE_CONFIG to its path")
 }
 
-// output runs rclone. On failure, the error includes the stderr text of rclone
-// but never stdout, because stdout can hold keys.
-func (r Rclone) output(args ...string) ([]byte, error) {
-	out, err := exec.Command(r.Bin, args...).Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		if msg := strings.TrimSpace(string(exit.Stderr)); msg != "" {
-			return nil, fmt.Errorf("%w: %s", err, msg)
+// LoadRemotes reads an rclone config file. hdup reads the file itself and
+// does not run rclone.
+func LoadRemotes(path string) (Remotes, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	remotes := Remotes{}
+	var section map[string]string
+	lines := bufio.NewScanner(f)
+	lines.Buffer(make([]byte, 64<<10), 1<<20)
+	for n := 1; lines.Scan(); n++ {
+		line := strings.TrimSpace(lines.Text())
+		switch {
+		case line == "" || line[0] == '#' || line[0] == ';':
+		case line == "RCLONE_ENCRYPT_V0:":
+			return nil, fmt.Errorf("%s is encrypted; hdup cannot read an encrypted rclone config", path)
+		case line[0] == '[' && line[len(line)-1] == ']':
+			section = map[string]string{}
+			remotes[line[1:len(line)-1]] = section
+		default:
+			key, value, ok := strings.Cut(line, "=")
+			if !ok || section == nil {
+				// The line can hold a secret. Do not show it.
+				return nil, fmt.Errorf("%s: line %d is not in a section or has no \"=\"", path, n)
+			}
+			section[strings.TrimSpace(key)] = strings.TrimSpace(value)
 		}
 	}
-	return out, err
+	if err := lines.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return remotes, nil
 }
 
-func (r Rclone) remote(name, wantType string) (map[string]string, error) {
-	out, err := r.output("config", "dump")
-	if err != nil {
-		return nil, fmt.Errorf("rclone config dump: %w", err)
-	}
-	var all map[string]map[string]string
-	if err := json.Unmarshal(out, &all); err != nil {
-		return nil, fmt.Errorf("rclone config dump: %w", err)
-	}
-	c, ok := all[name]
+func (r Remotes) remote(name, wantType string) (map[string]string, error) {
+	c, ok := r[name]
 	if !ok {
 		return nil, fmt.Errorf("rclone remote %q not found", name)
 	}
@@ -70,7 +97,7 @@ func (r Rclone) remote(name, wantType string) (map[string]string, error) {
 	return c, nil
 }
 
-func (r Rclone) S3(name string) (S3Remote, error) {
+func (r Remotes) S3(name string) (S3Remote, error) {
 	c, err := r.remote(name, "s3")
 	if err != nil {
 		return S3Remote{}, err
@@ -99,7 +126,7 @@ func regionOf(endpoint string) string {
 	return "us-east-1"
 }
 
-func (r Rclone) FTP(name string) (FTPRemote, error) {
+func (r Remotes) FTP(name string) (FTPRemote, error) {
 	c, err := r.remote(name, "ftp")
 	if err != nil {
 		return FTPRemote{}, err

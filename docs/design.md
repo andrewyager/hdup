@@ -61,7 +61,7 @@ decks × parts for each deck × part size.
 | Package | Function |
 |---|---|
 | `cmd/hdup` | Flags, signals, wiring. |
-| `internal/job` | Read the job file. Get remote settings from rclone. |
+| `internal/job` | Read the job file. Read the remotes from the rclone config file. |
 | `internal/source` | List deck files. Read a byte range through FTP. |
 | `internal/plan` | Calculate the part size and the part list for a file. |
 | `internal/balance` | Resolve the endpoint. Rotate new connections across its addresses. |

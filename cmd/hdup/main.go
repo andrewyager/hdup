@@ -92,12 +92,13 @@ func cli(ctx context.Context, args []string) error {
 	}
 }
 
-// env is the data that each command gets from the job file and rclone.
+// env is the data that each command gets from the job file and the rclone
+// config file.
 type env struct {
-	job    *job.Job
-	rclone job.Rclone
-	remote job.S3Remote
-	addrs  []string
+	job     *job.Job
+	remotes job.Remotes
+	remote  job.S3Remote
+	addrs   []string
 }
 
 func setup(ctx context.Context, jobPath string) (*env, error) {
@@ -105,12 +106,15 @@ func setup(ctx context.Context, jobPath string) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	bin, err := job.FindRclone()
+	conf, err := job.ConfigPath()
 	if err != nil {
 		return nil, err
 	}
-	rc := job.Rclone{Bin: bin}
-	remote, err := rc.S3(j.Remote)
+	remotes, err := job.LoadRemotes(conf)
+	if err != nil {
+		return nil, err
+	}
+	remote, err := remotes.S3(j.Remote)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +123,7 @@ func setup(ctx context.Context, jobPath string) (*env, error) {
 		return nil, fmt.Errorf("resolve %s: %w", remote.Endpoint, err)
 	}
 	fmt.Printf("%s has %d addresses\n", remote.Endpoint, len(addrs))
-	return &env{job: j, rclone: rc, remote: remote, addrs: addrs}, nil
+	return &env{job: j, remotes: remotes, remote: remote, addrs: addrs}, nil
 }
 
 func runProbe(ctx context.Context, jobPath string) error {
@@ -146,7 +150,7 @@ func runUpload(ctx context.Context, jobPath string, partsPerDeck int, partSize i
 	}
 	var decks []run.Deck
 	for _, d := range e.job.Decks {
-		r, err := e.rclone.FTP(d.Remote)
+		r, err := e.remotes.FTP(d.Remote)
 		if err != nil {
 			return err
 		}

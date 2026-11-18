@@ -79,9 +79,10 @@ services and other FTP servers can work, but they are not tested.
 ## Requirements
 
 - Go 1.27 or later to build.
-- [rclone](https://rclone.org/) on the machine that runs `hdup`, with one S3
-  remote and one FTP remote for each deck. `hdup` does not use rclone to move
-  data. It uses `rclone config dump` to read the remotes.
+- An [rclone](https://rclone.org/) config file with one S3 remote and one FTP
+  remote for each deck. `hdup` reads the file itself. rclone does not have to
+  be installed on the machine that runs `hdup`, but `rclone config` is the
+  easiest way to make the file.
 - An FTP server that supports `REST` (restart at an offset) and `MDTM`. The
   HyperDecks do.
 
@@ -97,8 +98,9 @@ Or build from a clone:
 go build -o hdup ./cmd/hdup
 ```
 
-`hdup` looks for rclone in `PATH`, then in `/opt/homebrew/bin` and
-`/usr/local/bin`.
+`hdup` reads the rclone config file from the path in `RCLONE_CONFIG`. If
+that variable is not set, it looks in `$XDG_CONFIG_HOME/rclone/rclone.conf`,
+`~/.config/rclone/rclone.conf` and `~/.rclone.conf`.
 
 ## Job file
 
@@ -236,6 +238,8 @@ Two procedures prevent this:
 ## Limits
 
 - The storage endpoint must use HTTPS.
+- `hdup` cannot read an rclone config file that is encrypted with a
+  password.
 - `hdup` copies files to the bucket. It does not delete, sync or download.
 - A file that is recording when the run starts fails with a clear message.
   Select completed files with the date window.
