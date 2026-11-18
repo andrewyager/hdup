@@ -45,18 +45,33 @@ does not do, and one command for all decks.
 
 ## What to expect
 
-On our link, the rate of one connection to the storage service was the limit,
-not the service and not the decks. `hdup` got its gain from the number of
-parallel connections. With 32 connections it reached approximately
-2.2 Gbit/s from four decks.
+We measured the upload rate to Wasabi with generated data, on a link that
+carries approximately 2.25 Gbit/s. The only difference between the two
+columns is the number of endpoint addresses in use:
 
-On that link, the distribution across the endpoint addresses made no
-measurable difference to the rate. Its value is that a run does not depend on
-one host of the storage service. `hdup probe` shows the effect on your link.
+| Connections | 1 address | 8 addresses |
+|---|---|---|
+| 8 | 620 Mbit/s | 1,840 Mbit/s |
+| 32 | 1,600 to 2,100 Mbit/s | 2,250 Mbit/s |
+| 64 | 2,200 Mbit/s | 2,250 Mbit/s |
 
-rclone with a large `--s3-upload-concurrency` can also use many connections.
-Use `hdup` if you also want resume of multipart uploads and a direct FTP to
-S3 path for more than one deck at a time.
+- With a small number of connections, the distribution across the addresses
+  gave approximately three times the rate.
+- One address can get near the limit of the link, but it needs many more
+  connections to do so.
+- The rate also increases with the number of connections, until the link is
+  full.
+
+In the real upload, `hdup` moved 2.3 TiB from four decks at up to
+2.2 Gbit/s with 32 connections.
+
+rclone with a large `--s3-upload-concurrency` also opens many connections,
+but on macOS they all go to one address. `hdup` also gives resume of
+multipart uploads and a direct FTP to S3 path for more than one deck at a
+time.
+
+Your link and your storage service can give different numbers. `hdup probe`
+measures some of these cases on your link.
 
 `hdup` is tested with HyperDeck FTP servers and with Wasabi. Other S3
 services and other FTP servers can work, but they are not tested.
