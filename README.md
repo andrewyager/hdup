@@ -93,8 +93,13 @@ services and other FTP servers can work, but they are not tested.
 ## Install
 
 Each release has binaries for macOS (arm64) and Windows (x64), and a
-`SHA256SUMS` file. The binaries are not signed. Get them from the
+`SHA256SUMS` file. Get them from the
 [releases page](https://github.com/andrewyager/hdup/releases).
+
+From v0.3.1, Real World Technology Solutions signs the binaries. The macOS
+binary has a Developer ID signature and Apple notarized it. The Windows
+binary has an Authenticode signature. The build and the signing do not run
+on github.com.
 
 To build with Go:
 
