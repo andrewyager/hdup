@@ -186,6 +186,22 @@ type Source struct {
 	Files     map[string][]byte
 	ModTime   time.Time
 	SizeDelta int64 // added to the result of Size, to simulate a changed file
+	Down      bool  // Stat fails, to simulate a deck that does not answer
+}
+
+func (s *Source) Stat(_ context.Context, paths []string) ([]source.StatResult, error) {
+	if s.Down {
+		return nil, errors.New("connection refused")
+	}
+	out := make([]source.StatResult, len(paths))
+	for i, p := range paths {
+		if b, ok := s.Files[p]; ok {
+			out[i].File = source.File{Path: p, Size: int64(len(b)), ModTime: s.ModTime}
+		} else {
+			out[i].Err = fmt.Errorf("size of %s: 550 no such file", p)
+		}
+	}
+	return out, nil
 }
 
 func (s *Source) List(context.Context) ([]source.File, error) {

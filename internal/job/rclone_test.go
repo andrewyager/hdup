@@ -121,11 +121,38 @@ func TestConfigPathUsesTheRcloneConfigVariableFirst(t *testing.T) {
 	}
 }
 
+// setHome sets the home directory for all platforms and removes APPDATA.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("APPDATA", "")
+}
+
+func TestConfigPathUsesTheAppDataDirectoryOfWindowsFirst(t *testing.T) {
+	appData := t.TempDir()
+	t.Setenv("RCLONE_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	setHome(t, t.TempDir())
+	t.Setenv("APPDATA", appData)
+	want := filepath.Join(appData, "rclone", "rclone.conf")
+	if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ConfigPath()
+	if err != nil || got != want {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
 func TestConfigPathFindsTheDefaultFileBelowTheHomeDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("RCLONE_CONFIG", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	want := filepath.Join(home, ".config", "rclone", "rclone.conf")
 	if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
 		t.Fatal(err)
@@ -143,7 +170,7 @@ func TestConfigPathUsesTheXDGDirectoryBeforeTheHomeDefault(t *testing.T) {
 	home, xdg := t.TempDir(), t.TempDir()
 	t.Setenv("RCLONE_CONFIG", "")
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	want := filepath.Join(xdg, "rclone", "rclone.conf")
 	for _, p := range []string{want, filepath.Join(home, ".config", "rclone", "rclone.conf")} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -162,7 +189,7 @@ func TestConfigPathUsesTheXDGDirectoryBeforeTheHomeDefault(t *testing.T) {
 func TestConfigPathFailsWithAClearMessageWhenThereIsNoConfigFile(t *testing.T) {
 	t.Setenv("RCLONE_CONFIG", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	_, err := ConfigPath()
 	if err == nil || !strings.Contains(err.Error(), "RCLONE_CONFIG") {
 		t.Fatalf("got error %v", err)

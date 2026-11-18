@@ -1,11 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/andrewyager/hdup/internal/job"
+	"github.com/andrewyager/hdup/internal/run"
 )
 
 func TestExitGivesTheCodeAndTheMessageForEachResult(t *testing.T) {
@@ -34,5 +45,109 @@ func TestExitGivesTheCodeAndTheMessageForEachResult(t *testing.T) {
 				t.Fatalf("got %d, %q", code, msg)
 			}
 		})
+	}
+}
+
+func runCLI(t *testing.T, stdin io.Reader, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	err = cli(context.Background(), args, stdio{in: stdin, out: &out, err: &errOut})
+	return out.String(), errOut.String(), err
+}
+
+func TestVersionNeedsNoConfigAndPrintsTheVersion(t *testing.T) {
+	t.Setenv("RCLONE_CONFIG", filepath.Join(t.TempDir(), "no-such-file"))
+	out, _, err := runCLI(t, nil, "version")
+	if err != nil || !strings.HasPrefix(out, "hdup ") || len(strings.TrimSpace(out)) <= len("hdup") {
+		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestUploadWithJSONProgressGivesAnErrorEventWhenTheJobFileIsIncorrect(t *testing.T) {
+	out, _, err := runCLI(t, nil, "upload", "--progress", "json", filepath.Join(t.TempDir(), "no-job.toml"))
+	if err == nil {
+		t.Fatal("got no error")
+	}
+	var ev map[string]string
+	if jerr := json.Unmarshal([]byte(out), &ev); jerr != nil || ev["event"] != "error" || ev["error"] == "" {
+		t.Fatalf("stdout %q: %v", out, jerr)
+	}
+}
+
+func TestUploadWithTextProgressGivesNoJSONWhenTheJobFileIsIncorrect(t *testing.T) {
+	out, _, err := runCLI(t, nil, "upload", filepath.Join(t.TempDir(), "no-job.toml"))
+	if err == nil || out != "" {
+		t.Fatalf("stdout %q, error %v", out, err)
+	}
+}
+
+func TestUploadRejectsIncorrectFlagValues(t *testing.T) {
+	for _, args := range [][]string{
+		{"upload", "--progress", "xml", "job.toml"},
+		{"upload", "--retries", "0", "job.toml"},
+		{"upload", "--part-size", "4", "job.toml"},
+		{"upload"},
+		{"probe"},
+		{"nope"},
+	} {
+		if _, _, err := runCLI(t, nil, args...); !errors.Is(err, errUsage) {
+			t.Fatalf("%v: got error %v", args, err)
+		}
+	}
+}
+
+func TestSetupWithAConfigFileDoesNotReadTheRcloneConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RCLONE_CONFIG", filepath.Join(dir, "no-such-file"))
+	jobPath, confPath := filepath.Join(dir, "job.toml"), filepath.Join(dir, "hdup.toml")
+	write := func(p, text string) {
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(jobPath, "remote = \"s\"\nbucket = \"b\"\n[[file]]\ndeck = \"d\"\npath = \"p\"\nkey = \"k\"\n")
+	write(confPath, "[s3.s]\nendpoint = \"localhost\"\naccess_key_id = \"AK\"\nsecret_access_key = \"SK\"\n[ftp.d]\nhost = \"127.0.0.1\"\n")
+	var info bytes.Buffer
+	e, err := setup(context.Background(), jobPath, confPath, &info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.remote.AccessKey != "AK" || len(e.addrs) == 0 || !strings.Contains(info.String(), "addresses") {
+		t.Fatalf("remote %+v, addrs %v, info %q", e.remote, e.addrs, info.String())
+	}
+}
+
+func TestFileDecksGroupsTheFilesByDeckAndKeepsTheSequence(t *testing.T) {
+	files := []job.File{
+		{Deck: "d2", Path: "p1", Key: "k1"},
+		{Deck: "d1", Path: "p2", Key: "k2"},
+		{Deck: "d2", Path: "p3", Key: "k3"},
+	}
+	got := groupFiles(files)
+	want := []deckFiles{
+		{name: "d2", files: []run.Target{{Path: "p1", Key: "k1"}, {Path: "p3", Key: "k3"}}},
+		{name: "d1", files: []run.Target{{Path: "p2", Key: "k2"}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestStopOnEOFCancelsWhenTheInputCloses(t *testing.T) {
+	pr, pw := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go stopOnEOF(pr, cancel)
+	pw.Write([]byte("ignored\n"))
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled before the input closed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	pw.Close()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("not cancelled after the input closed")
 	}
 }

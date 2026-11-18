@@ -61,12 +61,12 @@ decks × parts for each deck × part size.
 | Package | Function |
 |---|---|
 | `cmd/hdup` | Flags, signals, wiring. |
-| `internal/job` | Read the job file. Read the remotes from the rclone config file. |
+| `internal/job` | Read the job file. Read the remotes from the hdup config file or the rclone config file. |
 | `internal/source` | List deck files. Read a byte range through FTP. |
 | `internal/plan` | Calculate the part size and the part list for a file. |
 | `internal/balance` | Resolve the endpoint. Rotate new connections across its addresses. |
 | `internal/upload` | Upload one file: skip, single part, multipart, resume. |
-| `internal/run` | Preview, confirmation, deck workers, progress, summary. |
+| `internal/run` | Preview, confirmation, deck workers, progress, summary, JSON lines. |
 | `internal/probe` | Measure the upload rate with generated data. |
 | `internal/fake` | S3 and source substitutes in memory, for tests. |
 
@@ -78,6 +78,15 @@ window and its path matches an `include` pattern.
 
 An entry name that contains `/` is rejected, because it could put an object
 outside the prefix of its deck.
+
+## Explicit file list
+
+A job file with `[[file]]` entries gives the deck, the path and the object
+key of each file. `hdup` does not list the deck. It opens one connection to
+each deck and gets the size (`SIZE`) and the modified time (`MDTM`) of each
+file. This check makes one try, so a deck that is off costs one connect
+timeout of 10 seconds. A file that the deck cannot give, and each file of a
+deck that does not answer, fails. The other files continue.
 
 ## Part plan
 
@@ -125,7 +134,8 @@ from the deck again.
 ## Errors
 
 - A read or a send that fails is tried again up to 10 times, with a delay
-  that doubles to a maximum of 30 seconds.
+  that doubles to a maximum of 30 seconds. `--retries` changes the number.
+- A connection to a deck must open in 10 seconds.
 - A send has no fixed time limit. It stops if no data moves for 3 minutes.
 - An FTP connection stops if the deck is silent for 60 seconds.
 - S3 calls other than part sends have a limit of 2 minutes for each try.
@@ -133,6 +143,22 @@ from the deck again.
   size, the file counts as done. This is the case of a lost response.
 - A file that fails does not stop the other files. A second run continues
   it. Multipart uploads are not aborted on failure or on Ctrl-C.
+
+## Use from a different program
+
+`--progress json` writes one JSON object on each line of the standard output
+for each step of each file. The README gives the events. Each event of a
+file has the deck, the path and the key, because decks run in parallel.
+
+`--stdin-stop` stops the run when the standard input closes. Windows has no
+`SIGINT` for a child process, and this also stops `hdup` when its parent
+ends. A stop or a kill needs no clean-up: the storage service holds the
+state, and the next run continues.
+
+The hdup config file holds secrets as plain text. `hdup` refuses a config
+file that the group or other users can read. Windows access comes from
+ACLs, and `hdup` does not examine them. The two S3 keys can come from the
+environment, so that a program does not have to write them to a file.
 
 ## Probe
 
