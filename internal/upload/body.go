@@ -22,14 +22,17 @@ type body struct {
 	sent    func(int64)
 	idle    time.Duration
 	timer   *time.Timer
+	limit   *Limiter // optional
 }
 
 // newBody starts the idle timer. onIdle runs when no Read occurs for idle.
-func newBody(buf []byte, sent func(int64), idle time.Duration, onIdle func()) *body {
-	return &body{buf: buf, sent: sent, idle: idle, timer: time.AfterFunc(idle, onIdle)}
+func newBody(buf []byte, sent func(int64), idle time.Duration, onIdle func(), limit *Limiter) *body {
+	return &body{buf: buf, sent: sent, idle: idle, timer: time.AfterFunc(idle, onIdle), limit: limit}
 }
 
 func (b *body) Read(p []byte) (int, error) {
+	// The wait is before the lock, so that finish does not wait for it.
+	p = p[:b.limit.wait(len(p))]
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.ended {

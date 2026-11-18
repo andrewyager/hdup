@@ -218,6 +218,7 @@ Flags go before the job file. `--config FILE` applies to `upload` and to
 | `--parts-per-deck N` | 8 | Parallel parts for each deck. |
 | `--part-size N` | 64 | Part size in MiB (minimum 5). |
 | `--retries N` | 10 | Tries for each read, send and storage call. |
+| `--bwlimit RATE` | none | Limit the total send rate. See below. |
 | `--yes` | off | Do not ask for confirmation. |
 | `--dry-run` | off | Show the files and stop. |
 | `--progress MODE` | `text` | `text`, or `json` for JSON lines. |
@@ -231,6 +232,23 @@ approximately decks × parts for each deck × part size.
 During a run, `hdup` shows one line for each deck with the read rate from the
 deck and the send rate to the storage service, a total line, and the number
 of connections on each endpoint address.
+
+### Bandwidth limit
+
+`--bwlimit RATE` limits the send rate to the storage service. The limit is
+one total for all decks and all parts. The read from the decks has no limit
+of its own, but it slows to the same rate.
+
+`RATE` is a number with an optional suffix `B`, `K`, `M` or `G`. The unit is
+bytes for each second, with binary multiples: `10M` is 10 MiB/s, which is
+approximately 84 Mbit/s. A number with no suffix is in KiB/s. This is the
+format of rclone for one rate. `off` or `0` means no limit. `hdup` does not
+accept the timetable and the `up:down` formats of rclone.
+
+`hdup` gives each connection a small quantity of data in turn. With a very
+low limit and many parallel parts, each connection waits a long time for its
+turn, and the storage service can close it. For a limit below approximately
+64 KiB/s for each 32 parts, use a smaller `--parts-per-deck`.
 
 ### How many parallel parts
 

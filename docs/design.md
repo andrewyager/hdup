@@ -107,6 +107,16 @@ signatures stay valid.
   host name.
 - If a dial to an address fails, that address is held back for 30 seconds.
 
+## Bandwidth limit
+
+`--bwlimit` sets one limiter that all send bodies share. Before a body gives
+data to the HTTP client, it asks the limiter for a piece. The limiter gives
+each piece a time slot at the set rate, and the body sleeps until its slot.
+A piece is 1/64 of the bytes for one second, with a minimum of 1 KiB and a
+maximum of 64 KiB. The pieces are small so that each connection moves data
+continuously, and the idle rule of 3 minutes does not stop a slow part.
+There is no burst: time that was not used is not saved.
+
 ## Resume
 
 There is no local state. A run does this for each file:

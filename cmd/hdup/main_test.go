@@ -151,3 +151,26 @@ func TestStopOnEOFCancelsWhenTheInputCloses(t *testing.T) {
 		t.Fatal("not cancelled after the input closed")
 	}
 }
+
+func TestParseRateReadsTheRcloneFormatForOneRate(t *testing.T) {
+	good := map[string]int64{
+		"10M": 10 << 20, "10m": 10 << 20, "1.5M": 3 << 19, "512K": 512 << 10, "512": 512 << 10,
+		"100B": 100, "1G": 1 << 30, "off": 0, "0": 0, "": 0,
+	}
+	for in, want := range good {
+		if got, err := parseRate(in); err != nil || got != want {
+			t.Fatalf("%q: got %d, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"fast", "10X", "-1M", "10M:1M", "08:00,512K", "M", "1e3", "10 M", "0.0001B", "NaN", "Inf"} {
+		if got, err := parseRate(in); err == nil {
+			t.Fatalf("%q: got %d and no error", in, got)
+		}
+	}
+}
+
+func TestUploadRejectsABandwidthLimitItCannotRead(t *testing.T) {
+	if _, _, err := runCLI(t, nil, "upload", "--bwlimit", "fast", "job.toml"); !errors.Is(err, errUsage) {
+		t.Fatalf("got error %v", err)
+	}
+}

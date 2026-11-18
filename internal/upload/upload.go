@@ -46,6 +46,7 @@ type Uploader struct {
 	Retries     int           // tries for each read and each S3 call
 	Backoff     time.Duration // first delay between tries; doubles, 30 s maximum
 	IdleTimeout time.Duration // a send try stops when it moves no data for this time
+	Limit       *Limiter      // optional: the total send rate of all Uploaders that share it
 
 	// Optional progress hooks. They can be called from more than one
 	// goroutine. Read and Sent can get a negative value: it gives back the
@@ -154,7 +155,7 @@ var errIdle = errors.New("no data moved")
 func (u *Uploader) send(ctx context.Context, buf []byte, fn func(ctx context.Context, body io.ReadSeeker) error) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	b := newBody(buf, u.Sent, u.IdleTimeout, func() { cancel(errIdle) })
+	b := newBody(buf, u.Sent, u.IdleTimeout, func() { cancel(errIdle) }, u.Limit)
 	err := fn(ctx, b)
 	b.finish(err == nil)
 	if err != nil && errors.Is(context.Cause(ctx), errIdle) {
