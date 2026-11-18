@@ -9,6 +9,26 @@ We wrote it to move multi-terabyte recordings from four HyperDecks to Wasabi
 after an event. It replaces a shell script that started one `rclone copy` for
 each deck.
 
+## Why it exists
+
+An S3 endpoint usually has many IP addresses. The Wasabi endpoint that we use
+has eight. A client that opens its connections across all of them shares the
+load between the hosts of the storage service.
+
+On macOS, this tends not to occur. A client usually connects to the first
+address that the system gives for the endpoint name, and macOS tends to keep
+one address first. All connections then go to one host. We saw this with
+rclone on macOS: all upload traffic of a run went to a single address of the
+endpoint, and the other addresses got none.
+
+`hdup` does not use the order from the resolver. It resolves the endpoint
+itself, and it gives each new connection the next address in the list. During
+a run it shows the number of connections on each address, so you can see the
+distribution.
+
+The other reasons are resume of interrupted multipart uploads, which rclone
+does not do, and one command for all decks.
+
 ## What it does
 
 - **Parallel parts.** Each part of a file has its own FTP connection to the
@@ -30,6 +50,10 @@ On our link, the rate of one connection to the storage service was the limit,
 not the service and not the decks. `hdup` got its gain from the number of
 parallel connections. With 32 connections it reached approximately
 2.2 Gbit/s from four decks.
+
+On that link, the distribution across the endpoint addresses made no
+measurable difference to the rate. Its value is that a run does not depend on
+one host of the storage service. `hdup probe` shows the effect on your link.
 
 rclone with a large `--s3-upload-concurrency` can also use many connections.
 Use `hdup` if you also want resume of multipart uploads and a direct FTP to
