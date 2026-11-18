@@ -40,8 +40,11 @@ does not do, and one command for all decks.
 - **Checks.** Each part is sent with its MD5. A file that changes on the deck
   during the upload fails. Stored parts are verified before a resume
   continues.
-- **One job file.** It names the bucket, a date window and the decks.
-  Endpoints, keys and passwords come from your rclone config.
+- **One job file.** It names the bucket and the decks, with a date window
+  or an explicit file list. Endpoints, keys and passwords come from an `hdup`
+  config file or from your rclone config.
+- **Use from a different program.** `--progress json` gives one JSON object
+  on each line for each step of each file.
 
 ## What to expect
 
@@ -78,15 +81,22 @@ services and other FTP servers can work, but they are not tested.
 
 ## Requirements
 
-- Go 1.27 or later to build.
-- An [rclone](https://rclone.org/) config file with one S3 remote and one FTP
-  remote for each deck. `hdup` reads the file itself. rclone does not have to
-  be installed on the machine that runs `hdup`, but `rclone config` is the
-  easiest way to make the file.
+- Go 1.27 or later to build. The release binaries need nothing.
+- A config with one S3 remote and one FTP remote for each deck. This is an
+  `hdup` config file (see [Config file](#config-file)), or an
+  [rclone](https://rclone.org/) config file. `hdup` reads the rclone config
+  file itself. rclone does not have to be installed on the machine that runs
+  `hdup`.
 - An FTP server that supports `REST` (restart at an offset) and `MDTM`. The
   HyperDecks do.
 
 ## Install
+
+Each release has binaries for macOS (arm64) and Windows (x64), and a
+`SHA256SUMS` file. The binaries are not signed. Get them from the
+[releases page](https://github.com/andrewyager/hdup/releases).
+
+To build with Go:
 
 ```bash
 go install github.com/andrewyager/hdup/cmd/hdup@latest
@@ -98,20 +108,47 @@ Or build from a clone:
 go build -o hdup ./cmd/hdup
 ```
 
-`hdup` reads the rclone config file from the path in `RCLONE_CONFIG`. If
-that variable is not set, it looks in `$XDG_CONFIG_HOME/rclone/rclone.conf`,
-`~/.config/rclone/rclone.conf` and `~/.rclone.conf`.
+## Config file
+
+`--config FILE` gives an `hdup` config file. With this flag, `hdup` does not
+read an rclone config.
+
+```toml
+[s3.my-s3]
+endpoint          = "s3.ap-southeast-2.wasabisys.com"
+region            = "ap-southeast-2"   # optional
+access_key_id     = "..."
+secret_access_key = "..."
+
+[ftp.deck-1]
+host = "10.0.0.11"
+port = 21             # optional, default 21
+user = "anonymous"    # optional, default anonymous
+pass = "..."          # optional, plain text
+```
+
+- The name after `s3.` or `ftp.` is the name that the job file uses.
+- The file holds secrets as plain text. On macOS and Linux, `hdup` refuses
+  the file if the group or other users have access to it. Use `chmod 600`.
+  On Windows, `hdup` does not examine the access. Keep the file in a folder
+  that only your user can read.
+
+Without `--config`, `hdup` reads the rclone config file from the path in
+`RCLONE_CONFIG`. If that variable is not set, it looks in
+`%APPDATA%\rclone\rclone.conf` (Windows),
+`$XDG_CONFIG_HOME/rclone/rclone.conf`, `~/.config/rclone/rclone.conf` and
+`~/.rclone.conf`.
 
 ## Job file
 
 ```toml
-remote = "my-s3"        # rclone S3 remote
+remote = "my-s3"        # S3 remote
 bucket = "my-event"
 from   = "2026-01-15"   # files modified at or after 00:00 on this date
 to     = "2026-01-16"   # and before 00:00 on this date
 
 [[deck]]
-remote = "deck-1"       # rclone FTP remote
+remote = "deck-1"       # FTP remote
 path   = "internal/"
 
 [[deck]]
@@ -127,6 +164,34 @@ include = ["CH*/**"]    # optional
 - Each deck remote can be in the job file only one time.
 - The job file contains no secrets.
 
+### Explicit file list
+
+A job file can name each file and its object key. It then has no `from`, no
+`to` and no `[[deck]]`.
+
+```toml
+remote = "my-s3"
+bucket = "my-event"
+
+[[file]]
+deck = "deck-1"                        # FTP remote
+path = "internal/CH1/clip0001.mov"     # full path on the deck
+key  = "show/day1/cam1/clip0001.mov"   # full object key
+
+[[file]]
+deck = "deck-2"
+path = "internal/clip0007.mov"
+key  = "show/day1/cam2/clip0007.mov"
+```
+
+- Decks run in parallel. The files of one deck go in the sequence of the
+  list.
+- A key can be in the list only one time.
+- Before the upload, `hdup` gets the size and the modified time of each file
+  from its deck, with one try. A file that is not on the deck fails. If a
+  deck does not answer in 10 seconds, all the files of that deck fail. The
+  other files continue.
+
 ## Use
 
 ```bash
@@ -138,14 +203,21 @@ hdup probe job.toml              # measure the upload rate
 `hdup probe` uploads generated data for approximately 80 seconds. Then it
 aborts the upload and leaves nothing in the bucket.
 
-Flags for `upload` go before the job file:
+Flags go before the job file. `--config FILE` applies to `upload` and to
+`probe`. The other flags apply to `upload`:
 
 | Flag | Default | Function |
 |---|---|---|
+| `--config FILE` | none | Read this `hdup` config file and not the rclone config. |
 | `--parts-per-deck N` | 8 | Parallel parts for each deck. |
 | `--part-size N` | 64 | Part size in MiB (minimum 5). |
+| `--retries N` | 10 | Tries for each read, send and storage call. |
 | `--yes` | off | Do not ask for confirmation. |
 | `--dry-run` | off | Show the files and stop. |
+| `--progress MODE` | `text` | `text`, or `json` for JSON lines. |
+| `--stdin-stop` | off | Stop when the standard input closes. |
+
+`hdup version` shows the version. It reads no config.
 
 Decks run in parallel. The files of one deck go in sequence. Memory use is
 approximately decks × parts for each deck × part size.
@@ -176,7 +248,10 @@ connections.
 
 To continue after an interruption or a failed file, run the same command
 again. `hdup` skips files that are complete and sends only the missing parts
-of a file that is not complete. Do not change `--part-size` between the two
+of a file that is not complete. A file is complete if an object with its key
+and its size is in the bucket. `hdup` does not compare the content or the
+time of a complete object. If the object has a different size, `hdup`
+uploads the file and replaces the object. Do not change `--part-size` between the two
 runs: a different part size starts the file again.
 
 Before it continues a file, `hdup` reads the first and the last stored part
@@ -217,6 +292,75 @@ done, and stops on Ctrl-C. Put it in the same directory as `hdup` and
 Warning: do not run rclone or a second `hdup` on the same bucket keys at the
 same time. Resume aborts or continues multipart uploads that it did not
 start.
+
+## Use from a different program
+
+A program that starts `hdup` as a child process uses these flags:
+
+```bash
+hdup upload --config hdup.toml --progress json --stdin-stop job.toml
+```
+
+`--progress json` and `--stdin-stop` each include `--yes`.
+
+### JSON lines
+
+With `--progress json`, the standard output has only JSON objects, one on
+each line. Each line is written immediately. Text for a person goes to the
+standard error.
+
+| `event` | Other fields | When |
+|---|---|---|
+| `plan` | `files`, `bytes` | One time, after `hdup` has found the files. |
+| `file_start` | `deck`, `path`, `key`, `size` | The upload of a file starts. |
+| `file_progress` | `deck`, `path`, `key`, `size`, `done` | Each second for each file in progress. |
+| `file_done` | `deck`, `path`, `key`, `size`, `result` | The file is in the bucket. `result` is `uploaded` or `skipped`. |
+| `file_failed` | `deck`, `path`, `key`, `error`, and `size` if it is known | The file failed. |
+| `file_interrupted` | `deck`, `path`, `key`, `size` | A stop ended the upload of the file. |
+| `summary` | `uploaded`, `skipped`, `failed`, `interrupted`, `bytes`, `sent`, `elapsed_s` | One time, at the end. |
+| `error` | `error` | An error stopped the full run. There is no `summary`. |
+
+```json
+{"event":"plan","files":2,"bytes":2147483648}
+{"event":"file_start","deck":"deck-1","path":"internal/CH1/clip0001.mov","key":"show/day1/cam1/clip0001.mov","size":1073741824}
+{"event":"file_progress","deck":"deck-1","path":"internal/CH1/clip0001.mov","key":"show/day1/cam1/clip0001.mov","size":1073741824,"done":268435456}
+{"event":"file_done","deck":"deck-1","path":"internal/CH1/clip0001.mov","key":"show/day1/cam1/clip0001.mov","size":1073741824,"result":"uploaded"}
+{"event":"file_failed","deck":"deck-2","path":"internal/clip0007.mov","key":"show/day1/cam2/clip0007.mov","error":"..."}
+{"event":"summary","uploaded":1,"skipped":0,"failed":1,"interrupted":0,"bytes":1073741824,"sent":1073741824,"elapsed_s":12.5}
+```
+
+- Sizes and `done` are in bytes. `done` includes the bytes that an earlier
+  run sent. `done` can decrease when a part is tried again.
+- `plan` counts only the files that `hdup` found on the decks.
+- `bytes` in `summary` is the size of the uploaded files. `sent` is the
+  number of bytes that this run sent.
+- After a stop, a file that did not start has no event.
+- An error in the flags gives the usage text on the standard error and no
+  JSON line.
+- With a date window, `path` is the path below the deck path.
+
+### Stop
+
+On macOS and Linux, send `SIGINT` or `SIGTERM`. With `--stdin-stop`, `hdup`
+also stops when its standard input closes. Use this on Windows, and to stop
+`hdup` if the parent program ends. Keep the input open during the run:
+`hdup` stops immediately if the input is closed at the start.
+
+After a stop, `hdup` writes the summary and the exit code is 130. A process
+that is killed writes no summary. In the two cases, the next run continues
+the files, because the storage service holds the state.
+
+### Time limits
+
+- A connection to a deck must open in 10 seconds.
+- A deck that is silent for 60 seconds ends the try.
+- A send that moves no data for 3 minutes ends the try.
+- A storage call that sends no file data has 2 minutes for each try.
+- `--retries N` sets the number of tries. The delay between two tries starts
+  at 1 second and doubles to a maximum of 30 seconds.
+
+With a small `--retries` value, a file on a deck that stops fails quickly,
+and the next run continues it.
 
 ### macOS: detached sessions lose access to the decks
 

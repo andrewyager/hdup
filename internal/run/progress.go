@@ -17,6 +17,7 @@ type deckStats struct {
 	sent  atomic.Int64 // bytes sent to S3
 	done  atomic.Int64 // bytes sent, resumed or skipped
 	file  atomic.Value // string: the current file
+	cur   atomic.Pointer[fileState]
 
 	lastRead, lastSent int64
 }
@@ -125,14 +126,14 @@ func connsLine(counts map[string]int) string {
 	return strings.Join(parts, " ")
 }
 
-// loop prints until stop is closed.
-func (p *progress) loop(interval time.Duration, stop <-chan struct{}) {
+// loop calls tick at each interval until stop is closed.
+func loop(interval time.Duration, stop <-chan struct{}, tick func()) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
-			p.print()
+			tick()
 		case <-stop:
 			return
 		}

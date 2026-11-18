@@ -15,8 +15,17 @@ type File struct {
 	ModTime time.Time
 }
 
+// StatResult is the File of one path, or the error for that path.
+type StatResult struct {
+	File File
+	Err  error
+}
+
 type Source interface {
 	List(ctx context.Context) ([]File, error)
+	// Stat gives one result for each path, in the same sequence. It makes one
+	// try. The error is not nil if the deck does not answer.
+	Stat(ctx context.Context, paths []string) ([]StatResult, error)
 	Size(ctx context.Context, path string) (int64, error)
 	// ReadRange fills buf from offset, or returns an error.
 	ReadRange(ctx context.Context, path string, offset int64, buf []byte) error

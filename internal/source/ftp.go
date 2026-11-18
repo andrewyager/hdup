@@ -25,6 +25,10 @@ type FTP struct {
 // idleTimeout is the longest time that one read or write on a deck may wait.
 var idleTimeout = 60 * time.Second
 
+// dialTimeout is the longest time to wait for a connection to a deck. A deck
+// is on the local network, so a deck that does not answer in this time is off.
+const dialTimeout = 10 * time.Second
+
 // idleConn sets an idle deadline before each read and write.
 type idleConn struct{ net.Conn }
 
@@ -46,7 +50,7 @@ type session struct {
 }
 
 func (s *session) dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 30 * time.Second}
+	d := net.Dialer{Timeout: dialTimeout}
 	c, err := d.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
@@ -159,6 +163,30 @@ func (f *FTP) Size(ctx context.Context, p string) (int64, error) {
 	}
 	defer done(true)
 	return c.FileSize(path.Join(f.Root, p))
+}
+
+func (f *FTP) Stat(ctx context.Context, paths []string) ([]StatResult, error) {
+	c, done, err := f.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer done(true)
+	out := make([]StatResult, len(paths))
+	for i, p := range paths {
+		full := path.Join(f.Root, p)
+		size, err := c.FileSize(full)
+		if err != nil {
+			out[i].Err = fmt.Errorf("size of %s: %w", p, err)
+			continue
+		}
+		mt, err := c.GetTime(full)
+		if err != nil {
+			out[i].Err = fmt.Errorf("time of %s: %w", p, err)
+			continue
+		}
+		out[i].File = File{Path: p, Size: size, ModTime: mt}
+	}
+	return out, nil
 }
 
 // progressChunk is the number of bytes between two progress calls.

@@ -297,3 +297,34 @@ func TestValidNameRejectsSlashAndNul(t *testing.T) {
 		}
 	}
 }
+
+func TestFTPStatGivesSizeAndTimeOfEachPathAndAnErrorForAMissingFile(t *testing.T) {
+	src := startFTP(t, map[string]string{"/internal/CH1/a.mov": "0123456789", "/internal/b.mov": "xy"})
+	src.Root = ""
+	got, err := src.Stat(context.Background(), []string{"internal/CH1/a.mov", "internal/nope.mov", "internal/b.mov"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (File{Path: "internal/CH1/a.mov", Size: 10, ModTime: testTime}); got[0].Err != nil || got[0].File != want {
+		t.Fatalf("got %+v", got[0])
+	}
+	if got[1].Err == nil {
+		t.Fatal("a missing file gave no error")
+	}
+	if want := (File{Path: "internal/b.mov", Size: 2, ModTime: testTime}); got[2].Err != nil || got[2].File != want {
+		t.Fatalf("got %+v", got[2])
+	}
+}
+
+func TestFTPStatFailsAsAWholeWhenTheDeckDoesNotAnswer(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	src := &FTP{Addr: addr, User: "anonymous", Pass: "anonymous"}
+	if _, err := src.Stat(context.Background(), []string{"a.mov"}); err == nil {
+		t.Fatal("no error for a deck that does not answer")
+	}
+}

@@ -1,4 +1,4 @@
-// Command hdup uploads HyperDeck files to Wasabi.
+// Command hdup uploads HyperDeck files to S3 storage.
 package main
 
 import (
@@ -6,8 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -21,19 +23,44 @@ import (
 
 const usage = `Usage:
   hdup upload [flags] job.toml   upload the files that the job file selects
-  hdup probe job.toml            measure the upload rate to the bucket
+  hdup probe [flags] job.toml    measure the upload rate to the bucket
+  hdup version                   show the version
+
+Flag for upload and probe:
+  --config FILE        hdup config file; without it, hdup reads the rclone config
 
 Flags for upload:
   --parts-per-deck N   parallel parts for each deck (default 8)
   --part-size N        part size in MiB (default 64)
+  --retries N          tries for each read, send and storage call (default 10)
   --yes                do not ask for confirmation
-  --dry-run            show the files and stop`
+  --dry-run            show the files and stop
+  --progress MODE      text (default) or json: one JSON object on each line
+  --stdin-stop         stop when the standard input closes`
 
 type usageError string
 
 func (e usageError) Error() string { return string(e) }
 
 var errUsage error = usageError(usage)
+
+// version is set at link time for a release build.
+var version string
+
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "(devel)"
+}
+
+type stdio struct {
+	in       io.Reader
+	out, err io.Writer
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -43,7 +70,7 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	code, msg := exit(ctx, cli(ctx, os.Args[1:]))
+	code, msg := exit(ctx, cli(ctx, os.Args[1:], stdio{in: os.Stdin, out: os.Stdout, err: os.Stderr}))
 	if code != 0 {
 		fmt.Fprintln(os.Stderr, "hdup:", msg)
 		os.Exit(code)
@@ -64,57 +91,107 @@ func exit(ctx context.Context, err error) (int, string) {
 	}
 }
 
-func cli(ctx context.Context, args []string) error {
+type uploadOpts struct {
+	job, config  string
+	partsPerDeck int
+	partSize     int64
+	retries      int
+	yes, dryRun  bool
+	json         bool
+}
+
+func cli(ctx context.Context, args []string, std stdio) error {
 	if len(args) == 0 {
 		return errUsage
 	}
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(std.err)
+	fs.Usage = func() {}
+	config := fs.String("config", "", "hdup config file")
 	switch args[0] {
+	case "version":
+		fmt.Fprintln(std.out, "hdup", buildVersion())
+		return nil
 	case "probe":
-		if len(args) != 2 {
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 1 {
 			return errUsage
 		}
-		return runProbe(ctx, args[1])
+		return runProbe(ctx, fs.Arg(0), *config, std)
 	case "upload":
-		fs := flag.NewFlagSet("upload", flag.ContinueOnError)
 		partsPerDeck := fs.Int("parts-per-deck", 8, "parallel parts for each deck")
 		partMiB := fs.Int64("part-size", 64, "part size in MiB")
+		retries := fs.Int("retries", 10, "tries for each read, send and storage call")
 		yes := fs.Bool("yes", false, "do not ask for confirmation")
 		dryRun := fs.Bool("dry-run", false, "show the files and stop")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if fs.NArg() != 1 || *partsPerDeck < 1 || *partMiB < 5 {
+		progress := fs.String("progress", "text", "text or json")
+		stdinStop := fs.Bool("stdin-stop", false, "stop when the standard input closes")
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 1 || *partsPerDeck < 1 || *partMiB < 5 || *retries < 1 ||
+			(*progress != "text" && *progress != "json") {
 			return errUsage
 		}
-		return runUpload(ctx, fs.Arg(0), *partsPerDeck, *partMiB<<20, *yes, *dryRun)
+		o := uploadOpts{job: fs.Arg(0), config: *config, partsPerDeck: *partsPerDeck, partSize: *partMiB << 20,
+			retries: *retries, dryRun: *dryRun, json: *progress == "json"}
+		// The two modes that a program uses cannot ask a question.
+		o.yes = *yes || o.json || *stdinStop
+		if *stdinStop {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			go stopOnEOF(std.in, cancel)
+		}
+		err := runUpload(ctx, o, std)
+		var failed run.FailedError
+		if o.json && err != nil && ctx.Err() == nil && !errors.As(err, &failed) {
+			// The run stopped before it could report on each file.
+			run.EmitError(std.out, err)
+		}
+		return err
 	default:
 		return errUsage
 	}
 }
 
-// env is the data that each command gets from the job file and the rclone
-// config file.
+// stopOnEOF calls cancel when in closes. It ignores the data.
+func stopOnEOF(in io.Reader, cancel func()) {
+	io.Copy(io.Discard, in)
+	cancel()
+}
+
+// remotes gives the remotes that a job file names.
+type remotes interface {
+	S3(name string) (job.S3Remote, error)
+	FTP(name string) (job.FTPRemote, error)
+}
+
+// env is the data that each command gets from the job file and from the hdup
+// config file or the rclone config file.
 type env struct {
 	job     *job.Job
-	remotes job.Remotes
+	remotes remotes
 	remote  job.S3Remote
 	addrs   []string
 }
 
-func setup(ctx context.Context, jobPath string) (*env, error) {
+// setup reads the job file and the config. If configPath is empty, it reads
+// the rclone config file. It writes text for a person to info.
+func setup(ctx context.Context, jobPath, configPath string, info io.Writer) (*env, error) {
 	j, err := job.Load(jobPath, time.Local)
 	if err != nil {
 		return nil, err
 	}
-	conf, err := job.ConfigPath()
+	var rs remotes
+	if configPath != "" {
+		rs, err = job.LoadConfig(configPath)
+	} else {
+		var conf string
+		if conf, err = job.ConfigPath(); err == nil {
+			rs, err = job.LoadRemotes(conf)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	remotes, err := job.LoadRemotes(conf)
-	if err != nil {
-		return nil, err
-	}
-	remote, err := remotes.S3(j.Remote)
+	remote, err := rs.S3(j.Remote)
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +199,12 @@ func setup(ctx context.Context, jobPath string) (*env, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", remote.Endpoint, err)
 	}
-	fmt.Printf("%s has %d addresses\n", remote.Endpoint, len(addrs))
-	return &env{job: j, remotes: remotes, remote: remote, addrs: addrs}, nil
+	fmt.Fprintf(info, "%s has %d addresses\n", remote.Endpoint, len(addrs))
+	return &env{job: j, remotes: rs, remote: remote, addrs: addrs}, nil
 }
 
-func runProbe(ctx context.Context, jobPath string) error {
-	e, err := setup(ctx, jobPath)
+func runProbe(ctx context.Context, jobPath, configPath string, std stdio) error {
+	e, err := setup(ctx, jobPath, configPath, std.out)
 	if err != nil {
 		return err
 	}
@@ -139,12 +216,40 @@ func runProbe(ctx context.Context, jobPath string) error {
 		NewAPI: func(addrs []string, conns int) upload.API {
 			return upload.NewClient(e.remote, balance.New(addrs).Client(conns))
 		},
-		Out: os.Stdout,
+		Out: std.out,
 	})
 }
 
-func runUpload(ctx context.Context, jobPath string, partsPerDeck int, partSize int64, yes, dryRun bool) error {
-	e, err := setup(ctx, jobPath)
+// deckFiles is the part of an explicit file list that is on one deck.
+type deckFiles struct {
+	name  string
+	files []run.Target
+}
+
+// groupFiles gives the files of each deck. The decks and the files keep the
+// sequence of the list.
+func groupFiles(files []job.File) []deckFiles {
+	var out []deckFiles
+	index := map[string]int{}
+	for _, f := range files {
+		i, ok := index[f.Deck]
+		if !ok {
+			i = len(out)
+			index[f.Deck] = i
+			out = append(out, deckFiles{name: f.Deck})
+		}
+		out[i].files = append(out[i].files, run.Target{Path: f.Path, Key: f.Key})
+	}
+	return out
+}
+
+func runUpload(ctx context.Context, o uploadOpts, std stdio) error {
+	// In JSON mode, the standard output has only JSON lines.
+	info := std.out
+	if o.json {
+		info = std.err
+	}
+	e, err := setup(ctx, o.job, o.config, info)
 	if err != nil {
 		return err
 	}
@@ -160,11 +265,25 @@ func runUpload(ctx context.Context, jobPath string, partsPerDeck int, partSize i
 			Src:     &source.FTP{Addr: r.Addr, User: r.User, Pass: r.Pass, Root: d.Path},
 		})
 	}
+	for _, d := range groupFiles(e.job.Files) {
+		r, err := e.remotes.FTP(d.name)
+		if err != nil {
+			return err
+		}
+		decks = append(decks, run.Deck{
+			Name:  d.name,
+			Files: d.files,
+			Src:   &source.FTP{Addr: r.Addr, User: r.User, Pass: r.Pass},
+		})
+	}
 	bal := balance.New(e.addrs)
-	info, _ := os.Stdout.Stat()
-	live := info != nil && info.Mode()&os.ModeCharDevice != 0
+	live := false
+	if f, ok := std.out.(*os.File); ok && !o.json {
+		stat, _ := f.Stat()
+		live = stat != nil && stat.Mode()&os.ModeCharDevice != 0
+	}
 	interval := 10 * time.Second
-	if live {
+	if live || o.json {
 		interval = time.Second
 	}
 	_, err = run.Run(ctx, run.Config{
@@ -172,18 +291,19 @@ func runUpload(ctx context.Context, jobPath string, partsPerDeck int, partSize i
 		From:  e.job.FromTime,
 		To:    e.job.ToTime,
 		Uploader: upload.Uploader{
-			API:         upload.NewClient(e.remote, bal.Client(len(decks)*partsPerDeck)),
+			API:         upload.NewClient(e.remote, bal.Client(len(decks)*o.partsPerDeck)),
 			Bucket:      e.job.Bucket,
-			PartSize:    partSize,
-			Workers:     partsPerDeck,
-			Retries:     10,
+			PartSize:    o.partSize,
+			Workers:     o.partsPerDeck,
+			Retries:     o.retries,
 			Backoff:     time.Second,
 			IdleTimeout: 3 * time.Minute,
 		},
-		Yes:      yes,
-		DryRun:   dryRun,
-		In:       os.Stdin,
-		Out:      os.Stdout,
+		Yes:      o.yes,
+		DryRun:   o.dryRun,
+		JSON:     o.json,
+		In:       std.in,
+		Out:      std.out,
 		Conns:    bal.Counts,
 		Interval: interval,
 		Live:     live,

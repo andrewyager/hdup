@@ -83,3 +83,54 @@ func TestLoadRejectsAJobWithNoDecks(t *testing.T) {
 		t.Fatalf("got error %v", err)
 	}
 }
+
+const fileJob = `
+remote = "wasabi"
+bucket = "rushes"
+
+[[file]]
+deck = "deck-1"
+path = "internal/CH1/a.mov"
+key  = "show/day1/cam1/a.mov"
+
+[[file]]
+deck = "deck-2"
+path = "internal/b.mov"
+key  = "show/day1/cam2/b.mov"
+
+[[file]]
+deck = "deck-1"
+path = "internal/CH1/c.mov"
+key  = "show/day1/cam1/c.mov"
+`
+
+func TestLoadReadsAJobWithAFileListAndNoDateWindow(t *testing.T) {
+	j, err := load(t, fileJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := File{Deck: "deck-1", Path: "internal/CH1/c.mov", Key: "show/day1/cam1/c.mov"}
+	if len(j.Files) != 3 || j.Files[2] != want || len(j.Decks) != 0 {
+		t.Fatalf("got %+v", j)
+	}
+}
+
+func TestLoadRejectsIncorrectFileLists(t *testing.T) {
+	cases := map[string]struct{ old, new, want string }{
+		"file with no deck":        {`deck = "deck-2"`, ``, "deck"},
+		"file with no path":        {`path = "internal/b.mov"`, ``, "path"},
+		"file with no key":         {`key  = "show/day1/cam2/b.mov"`, ``, "key"},
+		"same key two times":       {`cam1/c.mov`, `cam1/a.mov`, "more than one"},
+		"key with a leading slash": {`"show/day1/cam2/b.mov"`, `"/show/b.mov"`, "key"},
+		"file list with a date":    {`bucket = "rushes"`, "bucket = \"rushes\"\nfrom = \"2026-11-12\"", "from"},
+		"file list with a deck":    {`[[file]]`, "[[deck]]\nremote = \"HD1\"\npath = \"internal/\"\n\n[[file]]", "[[deck]]"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := load(t, strings.Replace(fileJob, c.old, c.new, 1))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got error %v, want it to contain %q", err, c.want)
+			}
+		})
+	}
+}
