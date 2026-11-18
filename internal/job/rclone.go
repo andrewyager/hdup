@@ -102,14 +102,20 @@ func (r Remotes) S3(name string) (S3Remote, error) {
 	if err != nil {
 		return S3Remote{}, err
 	}
-	endpoint := strings.TrimPrefix(c["endpoint"], "https://")
+	return newS3Remote(fmt.Sprintf("rclone remote %q", name), c["endpoint"], c["region"], c["access_key_id"], c["secret_access_key"])
+}
+
+// newS3Remote checks the values of an S3 remote. what names the remote in an
+// error.
+func newS3Remote(what, endpoint, region, accessKey, secretKey string) (S3Remote, error) {
+	endpoint = strings.TrimPrefix(endpoint, "https://")
 	if strings.Contains(endpoint, "://") {
-		return S3Remote{}, fmt.Errorf("rclone remote %q: only https endpoints are supported", name)
+		return S3Remote{}, fmt.Errorf("%s: only https endpoints are supported", what)
 	}
 	endpoint = strings.TrimSuffix(endpoint, "/")
-	s := S3Remote{Endpoint: endpoint, Region: c["region"], AccessKey: c["access_key_id"], SecretKey: c["secret_access_key"]}
+	s := S3Remote{Endpoint: endpoint, Region: region, AccessKey: accessKey, SecretKey: secretKey}
 	if s.Endpoint == "" || s.AccessKey == "" || s.SecretKey == "" {
-		return S3Remote{}, fmt.Errorf("rclone remote %q must have endpoint, access_key_id and secret_access_key", name)
+		return S3Remote{}, fmt.Errorf("%s must have endpoint, access_key_id and secret_access_key", what)
 	}
 	if s.Region == "" {
 		s.Region = regionOf(s.Endpoint)
@@ -131,16 +137,9 @@ func (r Remotes) FTP(name string) (FTPRemote, error) {
 	if err != nil {
 		return FTPRemote{}, err
 	}
-	if c["host"] == "" {
-		return FTPRemote{}, fmt.Errorf("rclone remote %q has no host", name)
-	}
-	port := c["port"]
-	if port == "" {
-		port = "21"
-	}
-	f := FTPRemote{Addr: net.JoinHostPort(c["host"], port), User: c["user"]}
-	if f.User == "" {
-		f.User, f.Pass = "anonymous", "anonymous"
+	f, err := newFTPRemote(fmt.Sprintf("rclone remote %q", name), c["host"], c["port"], c["user"])
+	if err != nil {
+		return FTPRemote{}, err
 	}
 	if c["pass"] != "" {
 		pass, err := reveal(c["pass"])
@@ -148,6 +147,22 @@ func (r Remotes) FTP(name string) (FTPRemote, error) {
 			return FTPRemote{}, fmt.Errorf("rclone remote %q: password: %w", name, err)
 		}
 		f.Pass = pass
+	}
+	return f, nil
+}
+
+// newFTPRemote checks the values of an FTP remote. With no user, the user and
+// the password are "anonymous". With a user, the password is empty.
+func newFTPRemote(what, host, port, user string) (FTPRemote, error) {
+	if host == "" {
+		return FTPRemote{}, fmt.Errorf("%s has no host", what)
+	}
+	if port == "" {
+		port = "21"
+	}
+	f := FTPRemote{Addr: net.JoinHostPort(host, port), User: user}
+	if f.User == "" {
+		f.User, f.Pass = "anonymous", "anonymous"
 	}
 	return f, nil
 }
