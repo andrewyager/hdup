@@ -35,12 +35,18 @@ var testTime = time.Date(2026, 11, 12, 3, 4, 5, 0, time.UTC)
 // startFTP serves files (path to content) and returns a Source with root "internal/".
 func startFTP(t *testing.T, files map[string]string) *FTP {
 	t.Helper()
+	return startFTPAt(t, files, testTime)
+}
+
+// startFTPAt is startFTP with a given modified time for the files.
+func startFTPAt(t *testing.T, files map[string]string, modTime time.Time) *FTP {
+	t.Helper()
 	fs := afero.NewMemMapFs()
 	for p, content := range files {
 		if err := afero.WriteFile(fs, p, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := fs.Chtimes(p, testTime, testTime); err != nil {
+		if err := fs.Chtimes(p, modTime, modTime); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -326,5 +332,77 @@ func TestFTPStatFailsAsAWholeWhenTheDeckDoesNotAnswer(t *testing.T) {
 	src := &FTP{Addr: addr, User: "anonymous", Pass: "anonymous"}
 	if _, err := src.Stat(context.Background(), []string{"a.mov"}); err == nil {
 		t.Fatal("no error for a deck that does not answer")
+	}
+}
+
+// withoutMDTM puts a proxy before the deck that removes MDTM from the FEAT
+// reply. A HyperDeck has no MDTM.
+func withoutMDTM(t *testing.T, src *FTP) *FTP {
+	t.Helper()
+	l, open := listen(t)
+	go func() {
+		for {
+			client, err := l.Accept()
+			if err != nil {
+				return
+			}
+			server, err := net.Dial("tcp", src.Addr)
+			if err != nil {
+				client.Close()
+				return
+			}
+			open.add(client)
+			open.add(server)
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					n, err := client.Read(buf)
+					if n > 0 {
+						server.Write(buf[:n])
+					}
+					if err != nil {
+						server.Close()
+						return
+					}
+				}
+			}()
+			go func() {
+				r := bufio.NewReader(server)
+				for {
+					line, err := r.ReadString('\n')
+					if strings.TrimSpace(line) != "MDTM" {
+						client.Write([]byte(line))
+					}
+					if err != nil {
+						client.Close()
+						return
+					}
+				}
+			}()
+		}
+	}()
+	out := *src
+	out.Addr = l.Addr().String()
+	return &out
+}
+
+func TestFTPStatUsesTheTimeFromTheListWhenTheDeckHasNoMDTM(t *testing.T) {
+	// The list gives the time to the minute, and only for a recent file.
+	minute := time.Now().Add(-time.Hour).UTC().Truncate(time.Minute)
+	src := startFTPAt(t, map[string]string{"/internal/CH 1/a.mov": "0123456789", "/internal/b.mov": "xy"}, minute.Add(5*time.Second))
+	src.Root = ""
+	src = withoutMDTM(t, src)
+	got, err := src.Stat(context.Background(), []string{"internal/CH 1/a.mov", "internal/nope.mov", "internal/CH 9/c.mov", "internal/b.mov"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (File{Path: "internal/CH 1/a.mov", Size: 10, ModTime: minute}); got[0].Err != nil || got[0].File != want {
+		t.Fatalf("got %+v", got[0])
+	}
+	if got[1].Err == nil || got[2].Err == nil {
+		t.Fatalf("a missing file gave no error: %+v, %+v", got[1], got[2])
+	}
+	if want := (File{Path: "internal/b.mov", Size: 2, ModTime: minute}); got[3].Err != nil || got[3].File != want {
+		t.Fatalf("got %+v", got[3])
 	}
 }
