@@ -113,3 +113,27 @@ func TestLoadConfigDoesNotShowTheTextOfALineItCannotRead(t *testing.T) {
 		t.Fatalf("got error %v", err)
 	}
 }
+
+func TestConfigS3TakesTheKeysFromTheEnvironmentBeforeTheFile(t *testing.T) {
+	t.Setenv("HDUP_S3_ACCESS_KEY_ID", "ENVAK")
+	t.Setenv("HDUP_S3_SECRET_ACCESS_KEY", "ENVSK")
+	c, err := loadConfig(t, validConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.S3("wasabi"); err != nil || got.AccessKey != "ENVAK" || got.SecretKey != "ENVSK" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestConfigS3AcceptsAFileWithNoKeysWhenTheEnvironmentHasThem(t *testing.T) {
+	t.Setenv("HDUP_S3_ACCESS_KEY_ID", "ENVAK")
+	t.Setenv("HDUP_S3_SECRET_ACCESS_KEY", "ENVSK")
+	c, err := loadConfig(t, "[s3.wasabi]\nendpoint = \"s3.example.com\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.S3("wasabi"); err != nil || got.AccessKey != "ENVAK" || got.SecretKey != "ENVSK" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}

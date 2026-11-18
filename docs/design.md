@@ -157,7 +157,8 @@ state, and the next run continues.
 
 The hdup config file holds secrets as plain text. `hdup` refuses a config
 file that the group or other users can read. Windows access comes from
-ACLs, and `hdup` does not examine them.
+ACLs, and `hdup` does not examine them. The two S3 keys can come from the
+environment, so that a program does not have to write them to a file.
 
 ## Probe
 

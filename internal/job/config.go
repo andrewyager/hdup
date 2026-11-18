@@ -3,6 +3,7 @@ package job
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/BurntSushi/toml"
@@ -56,6 +57,14 @@ func (c *Config) S3(name string) (S3Remote, error) {
 	s, ok := c.S3s[name]
 	if !ok {
 		return S3Remote{}, fmt.Errorf("%s: there is no [s3.%s] section for the remote %q", c.path, name, name)
+	}
+	// A program that starts hdup can give the keys in the environment, so
+	// that it does not write them to a file.
+	if v := os.Getenv("HDUP_S3_ACCESS_KEY_ID"); v != "" {
+		s.AccessKey = v
+	}
+	if v := os.Getenv("HDUP_S3_SECRET_ACCESS_KEY"); v != "" {
+		s.SecretKey = v
 	}
 	return newS3Remote(fmt.Sprintf("%s: [s3.%s]", c.path, name), s.Endpoint, s.Region, s.AccessKey, s.SecretKey)
 }

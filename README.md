@@ -133,6 +133,12 @@ pass = "..."          # optional, plain text
   On Windows, `hdup` does not examine the access. Keep the file in a folder
   that only your user can read.
 
+- The environment variables `HDUP_S3_ACCESS_KEY_ID` and
+  `HDUP_S3_SECRET_ACCESS_KEY` replace the two keys of the S3 remote. The file
+  can then omit them. A program that starts `hdup` can use the variables so
+  that it does not write the keys to a file. The variables do not apply to
+  an rclone config.
+
 Without `--config`, `hdup` reads the rclone config file from the path in
 `RCLONE_CONFIG`. If that variable is not set, it looks in
 `%APPDATA%\rclone\rclone.conf` (Windows),
