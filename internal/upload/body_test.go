@@ -18,7 +18,7 @@ import (
 )
 
 func TestBodyIsAReadSeekerWithNoWriteTo(t *testing.T) {
-	var b any = newBody(make([]byte, 4), nil, time.Hour, func() {})
+	var b any = newBody(make([]byte, 4), nil, time.Hour, func() {}, nil)
 	if _, ok := b.(io.ReadSeeker); !ok {
 		t.Fatal("the body is not an io.ReadSeeker")
 	}
@@ -32,7 +32,7 @@ func TestBodyIsAReadSeekerWithNoWriteTo(t *testing.T) {
 
 func TestBodyCountsReadsAndGivesBackOnASeekBack(t *testing.T) {
 	var sent hook
-	b := newBody([]byte("0123456789"), sent.add, time.Hour, func() {})
+	b := newBody([]byte("0123456789"), sent.add, time.Hour, func() {}, nil)
 	// The SDK finds the length with a seek to the end and back.
 	if n, err := b.Seek(0, io.SeekEnd); n != 10 || err != nil {
 		t.Fatalf("seek to end: %d, %v", n, err)

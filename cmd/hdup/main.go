@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +35,8 @@ Flags for upload:
   --parts-per-deck N   parallel parts for each deck (default 8)
   --part-size N        part size in MiB (default 64)
   --retries N          tries for each read, send and storage call (default 10)
+  --bwlimit RATE       limit the total send rate, for example 10M for 10 MiB/s;
+                       suffix B, K, M or G, and no suffix means KiB/s
   --yes                do not ask for confirmation
   --dry-run            show the files and stop
   --progress MODE      text (default) or json: one JSON object on each line
@@ -96,6 +100,7 @@ type uploadOpts struct {
 	partsPerDeck int
 	partSize     int64
 	retries      int
+	bwlimit      int64 // bytes for each second; 0 is no limit
 	yes, dryRun  bool
 	json         bool
 }
@@ -125,12 +130,17 @@ func cli(ctx context.Context, args []string, std stdio) error {
 		dryRun := fs.Bool("dry-run", false, "show the files and stop")
 		progress := fs.String("progress", "text", "text or json")
 		stdinStop := fs.Bool("stdin-stop", false, "stop when the standard input closes")
+		bwlimit := fs.String("bwlimit", "", "limit the total send rate")
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 1 || *partsPerDeck < 1 || *partMiB < 5 || *retries < 1 ||
 			(*progress != "text" && *progress != "json") {
 			return errUsage
 		}
+		rate, err := parseRate(*bwlimit)
+		if err != nil {
+			return errUsage
+		}
 		o := uploadOpts{job: fs.Arg(0), config: *config, partsPerDeck: *partsPerDeck, partSize: *partMiB << 20,
-			retries: *retries, dryRun: *dryRun, json: *progress == "json"}
+			retries: *retries, bwlimit: rate, dryRun: *dryRun, json: *progress == "json"}
 		// The two modes that a program uses cannot ask a question.
 		o.yes = *yes || o.json || *stdinStop
 		if *stdinStop {
@@ -139,7 +149,7 @@ func cli(ctx context.Context, args []string, std stdio) error {
 			defer cancel()
 			go stopOnEOF(std.in, cancel)
 		}
-		err := runUpload(ctx, o, std)
+		err = runUpload(ctx, o, std)
 		var failed run.FailedError
 		if o.json && err != nil && ctx.Err() == nil && !errors.As(err, &failed) {
 			// The run stopped before it could report on each file.
@@ -149,6 +159,34 @@ func cli(ctx context.Context, args []string, std stdio) error {
 	default:
 		return errUsage
 	}
+}
+
+// parseRate reads a rate in the rclone format for one rate: a number and an
+// optional suffix B, K, M or G, with binary multiples. A number with no
+// suffix is in KiB. The result is in bytes for each second. "off", "0" and
+// "" give 0, which is no limit.
+func parseRate(s string) (int64, error) {
+	if s == "" || s == "off" {
+		return 0, nil
+	}
+	shift := 10
+	if i := strings.IndexByte("BKMG", s[len(s)-1]&^0x20); i >= 0 {
+		shift, s = 10*i, s[:len(s)-1]
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && c != '.' {
+			return 0, fmt.Errorf("incorrect rate")
+		}
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	rate := n * float64(int64(1)<<shift)
+	if rate != 0 && rate < 1 || rate > 1<<50 {
+		return 0, fmt.Errorf("incorrect rate")
+	}
+	return int64(rate), nil
 }
 
 // stopOnEOF calls cancel when in closes. It ignores the data.
@@ -277,6 +315,10 @@ func runUpload(ctx context.Context, o uploadOpts, std stdio) error {
 		})
 	}
 	bal := balance.New(e.addrs)
+	var limit *upload.Limiter
+	if o.bwlimit > 0 {
+		limit = upload.NewLimiter(o.bwlimit)
+	}
 	live := false
 	if f, ok := std.out.(*os.File); ok && !o.json {
 		stat, _ := f.Stat()
@@ -298,6 +340,7 @@ func runUpload(ctx context.Context, o uploadOpts, std stdio) error {
 			Retries:     o.retries,
 			Backoff:     time.Second,
 			IdleTimeout: 3 * time.Minute,
+			Limit:       limit,
 		},
 		Yes:      o.yes,
 		DryRun:   o.dryRun,
