@@ -34,6 +34,10 @@ func ConfigPath() (string, error) {
 		return p, nil
 	}
 	var candidates []string
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		// Windows.
+		candidates = append(candidates, filepath.Join(appData, "rclone", "rclone.conf"))
+	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		candidates = append(candidates, filepath.Join(xdg, "rclone", "rclone.conf"))
 	}
