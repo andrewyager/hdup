@@ -72,8 +72,9 @@ decks × parts for each deck × part size.
 
 ## List and filter
 
-The decks do not support `MLSD`, so `hdup` uses `LIST` and gets the time of
-each file with `MDTM`. A file is selected if its modified time is in the date
+The decks do not support `MLSD`, so `hdup` uses `LIST`. It gets the time of
+each file with `MDTM` if the deck has that command. If not, it uses the time
+from `LIST`, which has a precision of one minute. A file is selected if its modified time is in the date
 window and its path matches an `include` pattern.
 
 An entry name that contains `/` is rejected, because it could put an object
@@ -83,8 +84,9 @@ outside the prefix of its deck.
 
 A job file with `[[file]]` entries gives the deck, the path and the object
 key of each file. `hdup` does not list the deck. It opens one connection to
-each deck and gets the size (`SIZE`) and the modified time (`MDTM`) of each
-file. This check makes one try, so a deck that is off costs one connect
+each deck and gets the size (`SIZE`) and the modified time of each file. The
+time comes from `MDTM`, or from the `LIST` of the directory of the file if
+the deck has no `MDTM`. This check makes one try, so a deck that is off costs one connect
 timeout of 10 seconds. A file that the deck cannot give, and each file of a
 deck that does not answer, fails. The other files continue.
 

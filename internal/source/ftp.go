@@ -171,6 +171,12 @@ func (f *FTP) Stat(ctx context.Context, paths []string) ([]StatResult, error) {
 		return nil, err
 	}
 	defer done(true)
+	// A HyperDeck has no MDTM. The time then comes from the LIST of the
+	// directory, which gives it to the minute.
+	getTime := c.GetTime
+	if !c.IsGetTimeSupported() {
+		getTime = listTimes(c)
+	}
 	out := make([]StatResult, len(paths))
 	for i, p := range paths {
 		full := path.Join(f.Root, p)
@@ -179,7 +185,7 @@ func (f *FTP) Stat(ctx context.Context, paths []string) ([]StatResult, error) {
 			out[i].Err = fmt.Errorf("size of %s: %w", p, err)
 			continue
 		}
-		mt, err := c.GetTime(full)
+		mt, err := getTime(full)
 		if err != nil {
 			out[i].Err = fmt.Errorf("time of %s: %w", p, err)
 			continue
@@ -187,6 +193,34 @@ func (f *FTP) Stat(ctx context.Context, paths []string) ([]StatResult, error) {
 		out[i].File = File{Path: p, Size: size, ModTime: mt}
 	}
 	return out, nil
+}
+
+// listTimes gives a function that gets the time of a file from the LIST of
+// its directory. It lists each directory one time.
+func listTimes(c *ftp.ServerConn) func(full string) (time.Time, error) {
+	dirs := map[string]map[string]time.Time{}
+	return func(full string) (time.Time, error) {
+		dir, name := path.Split(full)
+		times, ok := dirs[dir]
+		if !ok {
+			entries, err := c.List(dir)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("list %s: %w", dir, err)
+			}
+			times = map[string]time.Time{}
+			for _, e := range entries {
+				if e.Type == ftp.EntryTypeFile {
+					times[e.Name] = e.Time
+				}
+			}
+			dirs[dir] = times
+		}
+		t, ok := times[name]
+		if !ok {
+			return time.Time{}, fmt.Errorf("the list of %s does not have the file", dir)
+		}
+		return t, nil
+	}
 }
 
 // progressChunk is the number of bytes between two progress calls.

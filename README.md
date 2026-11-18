@@ -87,8 +87,10 @@ services and other FTP servers can work, but they are not tested.
   [rclone](https://rclone.org/) config file. `hdup` reads the rclone config
   file itself. rclone does not have to be installed on the machine that runs
   `hdup`.
-- An FTP server that supports `REST` (restart at an offset) and `MDTM`. The
-  HyperDecks do.
+- An FTP server that supports `REST` (restart at an offset) and `SIZE`. The
+  HyperDecks do. If the server has `MDTM`, `hdup` uses it for the modified
+  time of a file. If not, the time comes from the directory list, to the
+  minute.
 
 ## Install
 
