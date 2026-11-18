@@ -15,11 +15,10 @@ An S3 endpoint usually has many IP addresses. The Wasabi endpoint that we use
 has eight. A client that opens its connections across all of them shares the
 load between the hosts of the storage service.
 
-On macOS, this tends not to occur. A client usually connects to the first
-address that the system gives for the endpoint name, and macOS tends to keep
-one address first. All connections then go to one host. We saw this with
-rclone on macOS: all upload traffic of a run went to a single address of the
-endpoint, and the other addresses got none.
+On macOS, this does not occur with rclone. rclone uses the system resolver,
+and the macOS resolver gives the same address for the endpoint name until its
+cache entry expires. All connections of a run then go to one host, and the
+other addresses get no traffic. We tested this on macOS and confirmed it.
 
 `hdup` does not use the order from the resolver. It resolves the endpoint
 itself, and it gives each new connection the next address in the list. During
